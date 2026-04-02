@@ -578,13 +578,15 @@ async function runAll() {
       const mime=queue[i].file.type||'image/jpeg';
 
       updateQItem(i,'processing','AI analyzing...');
-      const extracted=await callClaude(apiKey,b64,mime);
+      const records=await callClaude(apiKey,b64,mime);
 
+      // Upload file once for first record
       updateQItem(i,'processing','Uploading to Drive...');
-      const docType=extracted.docType||'Receipt';
-      const yearMonth=ym(extracted.dateReceipt||extracted.dateInvoice);
+      const firstRec=records[0];
+      const docType=firstRec.docType||'Receipt';
+      const yearMonth=ym(firstRec.dateReceipt||firstRec.dateInvoice);
       const ext=queue[i].file.name.split('.').pop()||'jpg';
-      const fileName=`${extracted.dateReceipt||yearMonth}_${safe(extracted.vendor)}_${docType}.${ext}`;
+      const fileName=`${firstRec.dateReceipt||yearMonth}_${safe(firstRec.vendor)}_${docType}.${ext}`;
 
       const upResp=await postScript(scriptUrl,{action:'uploadFile',fileName,base64Data:b64,mimeType:mime,yearMonth});
       if(!upResp.success) throw new Error('Drive: '+(upResp.error||'upload failed'));
@@ -592,13 +594,24 @@ async function runAll() {
       const invoiceLink=docType==='Invoice'?upResp.fileUrl:'';
       const receiptLink=docType==='Receipt'?upResp.fileUrl:'';
 
-      updateQItem(i,'processing','Saving to Sheet...');
-      const saveResp=await postScript(scriptUrl,{action:'saveRecord',...extracted,invoiceLink,receiptLink,docType});
-      if(!saveResp.success) throw new Error('Sheet: '+(saveResp.error||'save failed'));
-
-      if     (saveResp.action==='skipped') { stats.skip++;   updateQItem(i,'skipped',`Skipped (duplicate)`); }
-      else if(saveResp.action==='updated') { stats.update++; updateQItem(i,'done',`Updated row ${saveResp.row} ✓`); }
-      else                                 { stats.insert++; updateQItem(i,'done',`Added row ${saveResp.row} ✓`); }
+      // Save all records (may be 2 for Interac transfers)
+      updateQItem(i,'processing',`Saving ${records.length} record(s) to Sheet...`);
+      let lastAction='inserted', lastRow=0;
+      for(let r=0;r<records.length;r++){
+        const rec=records[r];
+        const recInvoiceLink=r===0?invoiceLink:'';
+        const recReceiptLink=r===0?receiptLink:'';
+        const saveResp=await postScript(scriptUrl,{action:'saveRecord',...rec,invoiceLink:recInvoiceLink,receiptLink:recReceiptLink,docType:rec.docType||'Receipt'});
+        if(!saveResp.success) throw new Error('Sheet: '+(saveResp.error||'save failed'));
+        lastAction=saveResp.action; lastRow=saveResp.row;
+        if(saveResp.action==='skipped') stats.skip++;
+        else if(saveResp.action==='updated') stats.update++;
+        else stats.insert++;
+      }
+      const label=records.length>1?`${records.length} rows`:`row ${lastRow}`;
+      if(lastAction==='skipped') updateQItem(i,'skipped',`Skipped (duplicate)`);
+      else if(lastAction==='updated') updateQItem(i,'done',`Updated ${label} ✓`);
+      else updateQItem(i,'done',`Added ${label} ✓`);
 
     } catch(err) { stats.error++; updateQItem(i,'error',err.message||'Error'); }
   }
@@ -611,21 +624,28 @@ async function runAll() {
 // ─── CLAUDE ───────────────────────────────────────────────────
 async function callClaude(apiKey,b64,mime) {
   const prompt=`You are a receipt/invoice data extractor for a Canadian BBQ restaurant business.
-Analyze the image and return ONLY a valid JSON object — no markdown, no explanation.
+Analyze the image and return ONLY a valid JSON array — no markdown, no explanation.
 
 Available categories: ${CATS.join(', ')}
 
-Return exactly this JSON:
+IMPORTANT - Interac e-Transfer Rule:
+If the document shows an Interac e-Transfer payment, return 2 separate records:
+1. The actual transfer amount (vendor = recipient, category = appropriate, total = full amount MINUS $1)
+2. Service fee: vendor="Scotiabank", category="Bank / POS Fees", description="Interac e-Transfer Fee", total="1.00", preTax="1.00", gstHst="0.00", paymentMethod="Interac"
+
+For all other documents, return array with 1 record.
+
+Each record structure:
 {
   "invoiceNum":    "invoice or receipt number or empty string",
   "dateInvoice":   "YYYY-MM-DD or empty string",
   "dateReceipt":   "YYYY-MM-DD or empty string",
   "vendor":        "vendor or company name",
   "category":      "one category from the list above",
-  "description":   "brief description of purchase",
-  "preTax":        "pre-tax amount as numeric string e.g. 45.00",
+  "description":   "brief description",
+  "preTax":        "pre-tax amount as numeric string",
   "gstHst":        "tax amount as numeric string",
-  "total":         "total amount as numeric string",
+  "total":         "total as numeric string",
   "paidBy":        "BBQ Inc. or person name if visible",
   "paymentMethod": "Cash / Credit Card / Debit / Interac / Cheque / Wire Transfer / Other",
   "status":        "Paid or Unpaid",
@@ -634,6 +654,7 @@ Return exactly this JSON:
 }
 
 Rules:
+- Always return a JSON array [ {...} ] even for single records
 - docType: use Invoice if header says INVOICE, otherwise Receipt
 - Ontario HST = 13% if not shown separately
 - Pick the closest category from the list only
@@ -648,7 +669,7 @@ Rules:
       'anthropic-dangerous-direct-browser-access':'true'
     },
     body:JSON.stringify({
-      model:'claude-opus-4-5', max_tokens:1024,
+      model:'claude-opus-4-5', max_tokens:2048,
       messages:[{role:'user',content:[
         {type:'image',source:{type:'base64',media_type:mime,data:b64}},
         {type:'text',text:prompt}
@@ -658,7 +679,8 @@ Rules:
   if(!res.ok){ const e=await res.json(); throw new Error('Claude: '+(e.error?.message||res.status)); }
   const data=await res.json();
   const raw=(data.content?.[0]?.text||'').replace(/```json|```/g,'').trim();
-  return JSON.parse(raw);
+  const parsed=JSON.parse(raw);
+  return Array.isArray(parsed)?parsed:[parsed];
 }
 
 async function postScript(url,payload) {
