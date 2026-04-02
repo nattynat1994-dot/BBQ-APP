@@ -411,7 +411,7 @@ const CATS = [
   "Meat","Ingredients","Supplies & Packaging","Supplies Cleaning",
   "Equipment","Utilities (Hydro/Gas/Water/Internet / Phone)",
   "Vehicle / Delivery","Rent","Maintenance / Repairs",
-  "Marketing & Advertising","POS Fees","Licences & Permits",
+  "Marketing & Advertising","Bank Fees / POS Fees","Licences & Permits",
   "Insurance","Labour / Payroll","Loan Repayment",
   "Loan Interest","Accounting / Legal","Other"
 ];
@@ -631,7 +631,7 @@ Available categories: ${CATS.join(', ')}
 IMPORTANT - Interac e-Transfer Rule:
 If the document shows an Interac e-Transfer payment, return 2 separate records:
 1. The actual transfer amount (vendor = recipient, category = appropriate, total = full amount MINUS $1)
-2. Service fee: vendor="Scotiabank", category="Bank / POS Fees", description="Interac e-Transfer Fee", total="1.00", preTax="1.00", gstHst="0.00", paymentMethod="Interac"
+2. Service fee: vendor="Scotiabank", category="Bank Fees / POS Fees", description="Interac e-Transfer Fee", total="1.00", preTax="1.00", gstHst="0.00", paymentMethod="Interac"
 
 For all other documents, return array with 1 record.
 
