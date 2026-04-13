@@ -609,7 +609,7 @@ async function runAll() {
         else stats.insert++;
       }
       const label=records.length>1?`${records.length} rows`:`row ${lastRow}`;
-      if(lastAction==='skipped') updateQItem(i,'skipped',`Skipped (duplicate)`);
+      if(lastAction==='skipped') updateQItem(i,'skipped',`⚠️ Duplicate of row ${lastRow}`);
       else if(lastAction==='updated') updateQItem(i,'done',`Updated ${label} ✓`);
       else updateQItem(i,'done',`Added ${label} ✓`);
 
